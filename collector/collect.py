@@ -30,6 +30,13 @@ SALT = os.environ.get("METRICS_SALT", "vpn-metrics-static-salt")
 SINK_HOST = os.environ.get("SINK_HOST", "135.106.178.226")
 SINK_PORT = os.environ.get("SINK_PORT", "50222")
 SINK_DIR = os.environ.get("SINK_DIR", "/opt/vpn-metrics")
+# SSH-ключи: на DE доступ к RU и к хранилищу идёт своим ключом
+RU_KEY = os.environ.get("RU_SSH_KEY", "/root/.ssh/id_de2ru")
+SINK_KEY = os.environ.get("SINK_SSH_KEY", "/root/.ssh/id_de2ru")
+
+
+def _key_args(path: str) -> list:
+    return ["-i", path] if path and os.path.exists(path) else []
 
 DAY = 86400
 NOW_MS = int(time.time() * 1000)
@@ -71,7 +78,7 @@ for port, in c.execute("select port from inbounds where enable=1"):
 try:
     rows = c.execute(
         "select cl.email, cl.enable, cl.expiry_time, cl.total_gb, cl.limit_ip,"
-        " coalesce(ct.up,0), coalesce(ct.down,0), coalesce(ct.total,0), ct.enable"
+        " coalesce(ct.up,0), coalesce(ct.down,0), coalesce(ct.total,0), ct.enable, coalesce(ct.last_online,0)"
         " from clients cl left join client_traffics ct on ct.email = cl.email"
     ).fetchall()
 except Exception as e:
@@ -81,13 +88,14 @@ for r in rows:
     out["clients"].append({
         "email": r[0], "enable": r[1], "expiry": r[2], "total_gb": r[3],
         "limit_ip": r[4], "up": r[5], "down": r[6], "total": r[7], "ct_enable": r[8],
+        "last_online": r[9],
     })
 print(json.dumps(out))
 """
 
 
 def read_ru() -> dict:
-    p = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+    p = subprocess.run(["ssh"] + _key_args(RU_KEY) + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                         f"root@{RU_HOST}", "python3 -"], input=RU_QUERY,
                        capture_output=True, text=True, timeout=120)
     if p.returncode != 0:
@@ -112,7 +120,10 @@ def classify(bot: dict, ru: dict) -> dict:
     for u in users:
         email = u.get("email") or ""
         cl = by_email.get(email)
-        silent = ms_to_days(u.get("last_seen"))
+        # активность: точнее брать last_online из x-ui (бот last_seen почти не пишет)
+        online = (cl or {}).get("last_online") or 0
+        seen_ms = max(int(u.get("last_seen") or 0), int(online))
+        silent = ms_to_days(seen_ms)
         unsub = 1 if (u.get("unsubscribed_at") or 0) else 0
         banned = 1 if u.get("banned") else 0
         has_key = bool(u.get("client_uuid")) and bool(cl)
@@ -152,8 +163,35 @@ def classify(bot: dict, ru: dict) -> dict:
         })
 
     total = len(users) or 1
+    # клиенты x-ui, которых нет в базе бота — тоже считаем, иначе картина неполная
+    seen_emails = {(u.get("email") or "") for u in users}
+    client_only = 0
+    for email, cl in by_email.items():
+        if not email or email in seen_emails:
+            continue
+        client_only += 1
+        silent = ms_to_days(cl.get("last_online") or 0)
+        cat = "never_seen" if silent is None else ("silent_90d" if silent > 90 else
+                                                   "silent_30d" if silent > 30 else
+                                                   "silent_7d" if silent > 7 else "active")
+        cats[cat] = cats.get(cat, 0) + 1
+        facts.append({
+            "tg_hash": tg_hash(f"email:{email}"),
+            "category": cat,
+            "created_at": 0,
+            "last_seen": cl.get("last_online") or 0,
+            "days_silent": silent if silent is not None else -1,
+            "has_key": 1,
+            "banned": 0,
+            "unsubscribed": 0,
+        })
+
+    if client_only:
+        total = len(users) + client_only
     metrics = {
-        "users_total": len(users),
+        "users_total": total,
+        "users_in_bot": len(users),
+        "clients_only": client_only,
         "users_with_key": sum(1 for f in facts if f["has_key"]),
         "keys_enabled": keys_ok,
         "clients_total": len(ru.get("clients", [])),
@@ -197,7 +235,7 @@ def main() -> int:
     snapshot = {
         "taken_at": started,
         "source_host": os.uname().nodename,
-        "users_total": data["users_total"],
+        "users_total": data["metrics"]["users_total"],
         "clients_total": data["metrics"]["clients_total"],
         "metrics": data["metrics"],
         "categories": data["categories"],
@@ -216,7 +254,7 @@ def main() -> int:
     cmd = (f"mkdir -p {SINK_DIR}/data {SINK_DIR}/categories && "
            f"cat > /tmp/metrics_payload.json && "
            f"python3 {SINK_DIR}/writer.py /tmp/metrics_payload.json")
-    p = subprocess.run(["ssh", "-p", SINK_PORT, "-o", "BatchMode=yes",
+    p = subprocess.run(["ssh"] + _key_args(SINK_KEY) + ["-p", SINK_PORT, "-o", "BatchMode=yes",
                         "-o", "ConnectTimeout=15", f"root@{SINK_HOST}", cmd],
                        input=payload, capture_output=True, text=True, timeout=300)
     print(p.stdout.strip()[-2000:])
