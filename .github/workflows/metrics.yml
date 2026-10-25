@@ -50,6 +50,7 @@ jobs:
       - name: Сбор и запись на второй RU-сервер
         env:
           METRICS_SALT: ${{ secrets.METRICS_SALT }}
+          DE_HOST: ${{ vars.DE_HOST }}
           RU_HOST: ${{ vars.RU_HOST }}
           SINK_HOST: ${{ vars.SINK_HOST }}
           SINK_PORT: ${{ vars.SINK_PORT || 50222 }}
@@ -57,6 +58,9 @@ jobs:
           bash ./deploy/collect_on_de.sh
 
       - name: Сводка (без персональных данных)
+        env:
+          SINK_HOST: ${{ vars.SINK_HOST }}
+          SINK_PORT: ${{ vars.SINK_PORT || 50222 }}
         run: |
           bash ./deploy/fetch_report.sh > summary.txt 2>&1 || true
           cat summary.txt
