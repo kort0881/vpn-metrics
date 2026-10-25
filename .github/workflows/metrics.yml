@@ -54,11 +54,11 @@ jobs:
           SINK_HOST: ${{ vars.SINK_HOST }}
           SINK_PORT: ${{ vars.SINK_PORT || 50222 }}
         run: |
-          ./deploy/collect_on_de.sh
+          bash ./deploy/collect_on_de.sh
 
       - name: Сводка (без персональных данных)
         run: |
-          ./deploy/fetch_report.sh > summary.txt 2>&1 || true
+          bash ./deploy/fetch_report.sh > summary.txt 2>&1 || true
           cat summary.txt
           {
             echo "### Метрики"
