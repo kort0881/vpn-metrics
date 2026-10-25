@@ -62,10 +62,13 @@ def read_bot(sqlite_path: str = BOT_DB) -> dict:
         "select telegram_id, email, client_uuid, created_at, last_seen,"
         " is_active, banned, unsubscribed_at, visits from users"
     )]
-    pay = c.execute("select count(*), coalesce(sum(case when status='paid' then amount else 0 end),0)"
-                    " from payments").fetchone()
+    pay = c.execute(
+        "select count(*), coalesce(sum(case when amount > 0 then amount else 0 end), 0)"
+        " from payments").fetchone()
+    claims = c.execute("select count(*) from payments where amount = 0").fetchone()[0]
     c.close()
-    return {"users": users, "payments_count": pay[0], "payments_sum": float(pay[1] or 0)}
+    return {"users": users, "payments_count": pay[0], "payments_sum": float(pay[1] or 0),
+            "claims_count": claims}
 
 
 # ---------------------------------------------------------------- x-ui (RU)
@@ -206,6 +209,7 @@ def classify(bot: dict, ru: dict) -> dict:
         "avg_traffic_gb_per_client": round(traffic_bytes / 1024 ** 3 / max(len(ru.get("clients", [])), 1), 2),
         "payments_sum": bot["payments_sum"],
         "payments_count": bot["payments_count"],
+        "claims_count": bot.get("claims_count", 0),
         "arpu": round(bot["payments_sum"] / total, 2),
         "conversion_key": round(sum(1 for f in facts if f["has_key"]) / total, 4),
     }
