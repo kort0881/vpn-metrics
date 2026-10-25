@@ -1,0 +1,17 @@
+# данные и секреты — никогда в репозиторий
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/
+categories/
+*.csv
+metrics_payload.json
+.env
+*.key
+*.pem
+__pycache__/
+*.pyc
+.venv/
+venv/

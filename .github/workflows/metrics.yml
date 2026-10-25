@@ -1,0 +1,68 @@
+name: metrics
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # каждый день в 03:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metrics
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: код и тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: синтаксис
+        run: |
+          python -m py_compile collector/*.py
+      - name: тесты
+        run: |
+          python -m unittest discover -s tests -v
+
+  collect:
+    name: сбор метрик на серверах
+    needs: check
+    runs-on: ubuntu-latest
+    # без секретов (SSH-ключ) шаг пропускается — репозиторий публичный
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.METRICS_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH-ключ
+        if: ${{ env.SSH_KEY != '' }}
+        env:
+          SSH_KEY: ${{ secrets.METRICS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ vars.DE_SSH_PORT || 22 }}" "${{ vars.DE_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Сбор и запись на второй RU-сервер
+        env:
+          METRICS_SALT: ${{ secrets.METRICS_SALT }}
+          RU_HOST: ${{ vars.RU_HOST }}
+          SINK_HOST: ${{ vars.SINK_HOST }}
+          SINK_PORT: ${{ vars.SINK_PORT || 50222 }}
+        run: |
+          ./deploy/collect_on_de.sh
+
+      - name: Сводка (без персональных данных)
+        run: |
+          ./deploy/fetch_report.sh > summary.txt 2>&1 || true
+          cat summary.txt
+          {
+            echo "### Метрики"
+            echo '```'
+            cat summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
