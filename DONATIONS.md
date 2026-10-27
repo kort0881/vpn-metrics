@@ -11,7 +11,7 @@
 `6k9ZwvVj5s1o3nFRJarwwhA6SBKcsyqL8yVxWGeYj8Yf`
 
 **TON**
-`UQAaZUtP9aP6tNZT5CDsgWdnKZy6Y9JQu8HRTKLZ-VBsX-N_`
+`UQAaZUtP9aP6tNZT5CDsgWdnKZy6Y9JQu8HRTKLZ-VBsV-N_`
 
 Спасибо за вклад! 🚀
 
