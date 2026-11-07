@@ -12,11 +12,11 @@ SSH_OPTS=(-p "$DE_PORT" -o BatchMode=yes -o ConnectTimeout=15)
 
 echo "== доставка сборщика на ${DE_HOST}:${REPO_DIR}"
 tar -czf - --exclude='__pycache__' collector deploy \
-  | ssh "${SSH_OPTS[@]}" "root@${DE_HOST}" "mkdir -p '${REPO_DIR}' && tar -xzf - -C '${REPO_DIR}'"
+  | ssh "${SSH_OPTS[@]}" "root@${DE_HOST}" "mkdir -p '${REPO_DIR}' && tar -xzf - -C '${REPO_DIR}' && chmod +x '${REPO_DIR}'/collector/collect.py"
 
 echo "== сбор"
 ssh "${SSH_OPTS[@]}" "root@${DE_HOST}" bash -s <<EOF
 set -e
 cd "${REPO_DIR}"
-./collector/collect.py
+python3 ./collector/collect.py
 EOF
