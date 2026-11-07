@@ -33,6 +33,11 @@ SINK_DIR = os.environ.get("SINK_DIR", "/opt/vpn-metrics")
 # SSH-ключи: на DE доступ к RU и к хранилищу идёт своим ключом
 RU_KEY = os.environ.get("RU_SSH_KEY", "/root/.ssh/id_de2ru")
 SINK_KEY = os.environ.get("SINK_SSH_KEY", "/root/.ssh/id_de2ru")
+# 07-11-26: сеть RU режет внешние подключения — пробуем несколько раз,
+# а при полной недоступности снимаем частичный снимок вместо красного джоба.
+RU_RETRIES = int(os.environ.get("RU_RETRIES", "3"))
+RU_CONNECT_TIMEOUT = os.environ.get("RU_CONNECT_TIMEOUT", "10")
+RU_JUMP = os.environ.get("RU_JUMP", "")  # jump-хост, если прямой SSH до RU закрыт
 
 
 def _key_args(path: str) -> list:
@@ -97,13 +102,34 @@ print(json.dumps(out))
 """
 
 
-def read_ru() -> dict:
-    p = subprocess.run(["ssh"] + _key_args(RU_KEY) + ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                        f"root@{RU_HOST}", "python3 -"], input=RU_QUERY,
-                       capture_output=True, text=True, timeout=120)
-    if p.returncode != 0:
-        raise RuntimeError(f"SSH к RU не удался: {p.stderr.strip()[:200]}")
-    return json.loads(p.stdout.strip().splitlines()[-1])
+def read_ru() -> dict | None:
+    """Читает базу x-ui на RU по SSH.
+
+    Возвращает None, если узел недоступен: сеть RU периодически режет внешние
+    подключения (SSH обрывается на banner exchange), и это не сбой сборщика.
+    Прямой путь можно обойти через RU_JUMP (например root@45.140.204.55).
+    """
+    cmd = ["ssh"] + _key_args(RU_KEY) + ["-o", "BatchMode=yes",
+                                       "-o", f"ConnectTimeout={RU_CONNECT_TIMEOUT}"]
+    if RU_JUMP:
+        cmd += ["-J", RU_JUMP]
+    cmd += [f"root@{RU_HOST}", "python3 -"]
+
+    last_err = ""
+    for attempt in range(1, RU_RETRIES + 1):
+        p = subprocess.run(cmd, input=RU_QUERY, capture_output=True, text=True, timeout=120)
+        if p.returncode == 0:
+            try:
+                return json.loads(p.stdout.strip().splitlines()[-1])
+            except (IndexError, json.JSONDecodeError) as e:
+                last_err = f"ответ не разобран: {e}"
+        else:
+            last_err = (p.stderr.strip() or "пустой stderr")[:200]
+        if attempt < RU_RETRIES:
+            time.sleep(5 * attempt)
+    print(f"ПРЕДУПРЕЖДЕНИЕ: SSH к RU недоступен после {RU_RETRIES} попыток "
+          f"({last_err}) — частичный снимок без данных x-ui", file=sys.stderr)
+    return None
 
 
 # ---------------------------------------------------------------- метрики
@@ -234,6 +260,9 @@ def main() -> int:
     started = NOW_MS
     bot = read_bot(args.bot_db)
     ru = read_ru()
+    ru_available = ru is not None
+    if not ru_available:
+        ru = {"clients": [], "inbounds": []}  # считаем по тому, что есть
     data = classify(bot, ru)
 
     snapshot = {
@@ -246,6 +275,12 @@ def main() -> int:
         "inbounds": data["inbounds"],
         "facts": data["facts"],
         "started_at": started,
+        "ru_available": ru_available,
+        "partial": not ru_available,
+        "note": "" if ru_available else (
+            "RU недоступен: SSH до x-ui не прошёл — данных клиентов панели нет, "
+            "показатели по ключам/трафику нулевые"
+        ),
     }
 
     if args.dry_run:

@@ -43,14 +43,17 @@ def main() -> int:
     if os.path.exists(SCHEMA):
         c.executescript(open(SCHEMA, encoding="utf-8").read())
 
+    run_status = "partial" if snap.get("partial") else "ok"
     run_id = c.execute(
-        "insert into runs(started_at, status) values(?, 'ok')",
-        (int(snap.get("started_at") or time.time() * 1000),),
+        "insert into runs(started_at, status) values(?, ?)",
+        (int(snap.get("started_at") or time.time() * 1000), run_status),
     ).lastrowid
 
     cur = c.execute(
-        "insert into snapshots(taken_at, source_host, users_total, clients_total) values(?,?,?,?)",
-        (snap["taken_at"], snap.get("source_host", "?"), snap["users_total"], snap["clients_total"]),
+        "insert into snapshots(taken_at, source_host, users_total, clients_total, note)"
+        " values(?,?,?,?,?)",
+        (snap["taken_at"], snap.get("source_host", "?"), snap["users_total"],
+         snap["clients_total"], snap.get("note") or None),
     )
     sid = cur.lastrowid
 
@@ -89,8 +92,11 @@ def main() -> int:
          m.get("traffic_gb", 0.0), m.get("payments_sum", 0.0), m.get("payments_count", 0)),
     )
 
-    c.execute("update runs set finished_at=?, status='ok', detail=? where id=?",
-              (int(time.time() * 1000), f"snapshot {sid}, facts {len(snap['facts'])}", run_id))
+    detail = f"snapshot {sid}, facts {len(snap['facts'])}"
+    if snap.get("partial"):
+        detail = f"{detail}; {snap.get('note') or 'частичный снимок'}"
+    c.execute("update runs set finished_at=?, status=?, detail=? where id=?",
+              (int(time.time() * 1000), run_status, detail, run_id))
     c.commit()
 
     # распределение по разным файлам-базам, чтобы можно было смотреть категории отдельно
